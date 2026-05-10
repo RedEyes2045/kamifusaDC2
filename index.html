@@ -1,0 +1,1133 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>むし歯クイズ 次世代版 🦷</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=M+PLUS+Rounded+1c:wght@400;700;800&display=swap" rel="stylesheet">
+  <script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+  <script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js"></script>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body { height: 100%; }
+    body {
+      font-family: 'M PLUS Rounded 1c', 'Rounded Mplus 1c', sans-serif;
+      min-height: 100dvh;
+      overflow-x: hidden;
+      -webkit-tap-highlight-color: transparent;
+      background: linear-gradient(135deg, #F8A9B8 0%, #fde0e8 40%, #d6f07a 70%, #A0DA36 100%);
+    }
+    ruby rt { font-size: 0.6em; line-height: 1; }
+    @keyframes floatY {
+      0%, 100% { transform: translateY(0); }
+      50% { transform: translateY(-14px); }
+    }
+    @keyframes comboPop {
+      0%   { transform: scale(0.4) rotate(-8deg); opacity: 0; }
+      55%  { transform: scale(1.25) rotate(4deg); opacity: 1; }
+      100% { transform: scale(1) rotate(0deg); opacity: 1; }
+    }
+    @keyframes fadeUp {
+      from { opacity: 0; transform: translateY(10px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+    @keyframes hpDrop {
+      from { width: var(--hp-from); }
+      to   { width: var(--hp-to); }
+    }
+    @keyframes shake {
+      0%, 100% { transform: translateX(0); }
+      20%  { transform: translateX(-6px); }
+      40%  { transform: translateX(6px); }
+      60%  { transform: translateX(-4px); }
+      80%  { transform: translateX(4px); }
+    }
+    @keyframes timerPulse {
+      0%, 100% { transform: scale(1); }
+      50%  { transform: scale(1.15); }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after {
+        animation-duration: 0.01ms !important;
+        transition-duration: 0.01ms !important;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script>
+    var IMG_HAKU = "ハクくん.png";
+    var IMG_BOSS = "むし歯大魔王.png";
+  </script>
+  <script type="text/babel">
+
+    const { useState, useEffect, useRef, useCallback } = React;
+
+    /* =====================================================================
+       AUDIO  (Web Audio API — no external files)
+    ===================================================================== */
+    let _ctx = null;
+    function getCtx() {
+      if (!_ctx) _ctx = new (window.AudioContext || window.webkitAudioContext)();
+      if (_ctx.state === 'suspended') _ctx.resume();
+      return _ctx;
+    }
+    function tone(freq, type, dur, delay = 0, vol = 0.28) {
+      try {
+        const ctx = getCtx();
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = type;
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        const t = ctx.currentTime + delay;
+        osc.frequency.setValueAtTime(freq, t);
+        gain.gain.setValueAtTime(vol, t);
+        gain.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+        osc.start(t);
+        osc.stop(t + dur + 0.01);
+      } catch(e) {}
+    }
+    const SFX = {
+      correct() {
+        tone(523.25, 'sine', 0.12, 0);
+        tone(659.25, 'sine', 0.12, 0.10);
+        tone(783.99, 'sine', 0.25, 0.20);
+      },
+      wrong() {
+        tone(220, 'square', 0.12, 0, 0.18);
+        tone(165, 'square', 0.22, 0.12, 0.18);
+      },
+      fanfare() {
+        [523.25, 659.25, 783.99, 1046.5].forEach((f, i) => tone(f, 'sine', 0.35, i * 0.13));
+        setTimeout(() => [783.99, 1046.5, 1318.51].forEach((f, i) => tone(f, 'sine', 0.45, i * 0.12)), 700);
+      },
+      combo() {
+        tone(880,    'sine', 0.18, 0,    0.22);
+        tone(1108.73,'sine', 0.18, 0.10, 0.22);
+        tone(1318.51,'sine', 0.25, 0.20, 0.22);
+      },
+      tap() { tone(660, 'sine', 0.05, 0, 0.1); },
+    };
+
+    /* =====================================================================
+       FURIGANA HELPERS
+    ===================================================================== */
+    const rb = (k, f) => `<ruby>${k}<rt>${f}</rt></ruby>`;
+    const H = ({ t, style }) => (
+      <span style={style} dangerouslySetInnerHTML={{ __html: t }} />
+    );
+
+    /* =====================================================================
+       QUESTIONS DATA  (20問・ふりがな付き)
+    ===================================================================== */
+    const QS = [
+      {
+        q: `むし${rb('歯','は')}になると、どうなっちゃうの？`,
+        opts: [
+          `${rb('歯','は')}が${rb('光','ひか')}り${rb('出','だ')}す✨`,
+          `${rb('歯','は')}に${rb('穴','あな')}があいて${rb('痛','いた')}くなる😭`,
+          `${rb('歯','は')}が${rb('大','おお')}きくなる`,
+          `${rb('歯','は')}がピンク${rb('色','いろ')}になる`,
+        ],
+        correct: 1, type: '4',
+        expl: `むし${rb('歯','は')}になると、${rb('歯','は')}に${rb('穴','あな')}があいてズキズキ${rb('痛','いた')}くなるよ！${rb('食','た')}べものもおいしく${rb('食','た')}べられなくなっちゃう…こわいね！`,
+      },
+      {
+        q: `むし${rb('歯','は')}は、どうしてできるの？`,
+        opts: [
+          `${rb('歯','は')}がねむいから`,
+          `むし${rb('歯','は')}キンのうんちが${rb('歯','は')}をとかすから💩`,
+          `${rb('歯','は')}が${rb('古','ふる')}くなったから`,
+          `むし${rb('歯','は')}キンが${rb('歯','は')}を${rb('食','た')}べちゃうから`,
+        ],
+        correct: 1, type: '4',
+        expl: `むし${rb('歯','は')}キンが${rb('甘','あま')}〜い${rb('砂糖','さとう')}を${rb('食','た')}べてうんち（${rb('酸','さん')}）を${rb('出','だ')}すんだ！その${rb('酸','さん')}が${rb('歯','は')}をとかしてむし${rb('歯','は')}にするよ〜こわ〜い！`,
+      },
+      {
+        q: `むし${rb('歯','は')}キンの${rb('正','ただ')}しい${rb('名前','なまえ')}は？😆`,
+        opts: [
+          `ストレプトコッカスミュータンス`,
+          `バイキンマン`,
+          `むしむしキング`,
+          `デンタルモンスター`,
+        ],
+        correct: 0, type: '4',
+        expl: `ストレプトコッカスミュータンス！これがむし${rb('歯','は')}キンの${rb('正式','せいしき')}な${rb('名前','なまえ')}だ！${rb('長','なが')}いね。3${rb('回','かい')}つづけて${rb('言','い')}えるかな？`,
+      },
+      {
+        q: `むし${rb('歯','は')}キンは、どこからやってくるの？`,
+        opts: [
+          `${rb('空','そら')}からふってくる`,
+          `${rb('人','ひと')}から${rb('人','ひと')}へうつる😱`,
+          `${rb('歯','は')}から${rb('自然','しぜん')}に${rb('生','う')}まれる`,
+          `${rb('元々','もともと')}${rb('口','くち')}の${rb('中','なか')}に${rb('住','す')}んでいる`,
+        ],
+        correct: 1, type: '4',
+        expl: `むし${rb('歯','は')}キンは${rb('人','ひと')}からうつるんだよ！${rb('赤','あか')}ちゃんの${rb('時','とき')}に${rb('大人','おとな')}の${rb('使','つか')}ったスプーンや${rb('箸','はし')}からうつることが${rb('多','おお')}いんだ。${rb('家族','かぞく')}みんなで${rb('気','き')}をつけようね！`,
+      },
+      {
+        q: `むし${rb('歯','は')}キンが${rb('一番','いちばん')}${rb('好','す')}きな${rb('食','た')}べものは？`,
+        opts: [
+          `${rb('野菜','やさい')}`,
+          `お${rb('肉','にく')}`,
+          `${rb('砂糖','さとう')}🍬`,
+          `お${rb('魚','さかな')}`,
+        ],
+        correct: 2, type: '4',
+        expl: `${rb('砂糖','さとう')}が${rb('大好','だいす')}き！むし${rb('歯','は')}キンは${rb('砂糖','さとう')}を${rb('食','た')}べると${rb('酸','さん')}のうんちを${rb('出','だ')}すんだ💩 だから${rb('甘','あま')}いものをダラダラ${rb('食','た')}べてバイキンにエサを${rb('与','あた')}えすぎないようにね！`,
+      },
+      {
+        q: `むし${rb('歯','は')}になりやすいおやつはどっち？🍰🍘`,
+        opts: [`おせんべい`, `ケーキ`],
+        correct: 1, type: '2',
+        expl: `ケーキの${rb('方','ほう')}がむし${rb('歯','は')}になりやすいよ！${rb('砂糖','さとう')}がたっぷりで${rb('歯','は')}にくっつきやすいからね。おせんべいは${rb('砂糖','さとう')}が${rb('少','すく')}なめでOKだよ！`,
+      },
+      {
+        q: `むし${rb('歯','は')}になりやすいおやつはどっち？🍬`,
+        opts: [`あめ`, `チーズ`],
+        correct: 0, type: '2',
+        expl: `あめは${rb('最悪','さいあく')}！${rb('口','くち')}の${rb('中','なか')}に${rb('長','なが')}〜くいるからむし${rb('歯','は')}キンが${rb('大喜','おおよろこ')}びでうんちを${rb('出','だ')}しまくるよ💩 チーズはカルシウムたっぷりで${rb('歯','は')}に${rb('良','よ')}いんだ！`,
+      },
+      {
+        q: `むし${rb('歯','は')}になりやすい${rb('飲','の')}みものはどっち？🥤🍵`,
+        opts: [`お${rb('茶','ちゃ')}`, `たんさん${rb('飲料','いんりょう')}`],
+        correct: 1, type: '2',
+        expl: `たんさん${rb('飲料','いんりょう')}は${rb('砂糖','さとう')}たっぷり＆${rb('酸','さん')}${rb('性','せい')}で${rb('歯','は')}にダブルパンチ！お${rb('茶','ちゃ')}は${rb('砂糖','さとう')}ゼロ、フッそも${rb('含','ふく')}まれて${rb('歯','は')}にやさしいよ！`,
+      },
+      {
+        q: `むし${rb('歯','は')}になりやすい${rb('飲','の')}みものはどっち？🥤💧`,
+        opts: [`スポーツドリンク`, `お${rb('水','みず')}`],
+        correct: 0, type: '2',
+        expl: `スポーツドリンクには${rb('砂糖','さとう')}がたっぷり！しかも${rb('酸','さん')}${rb('性','せい')}だから${rb('歯','は')}にダブルパンチ！😱 スポーツの${rb('後','あと')}はお${rb('水','みず')}かお${rb('茶','ちゃ')}にしようね。`,
+      },
+      {
+        q: `むし${rb('歯','は')}にならないためにはどうすればいい？`,
+        opts: [
+          `むし${rb('歯','は')}キンを${rb('育','そだ')}てるために${rb('甘','あま')}〜いエサをやる`,
+          `むし${rb('歯','は')}キンをやっつけるために${rb('歯','は')}みがきをする！`,
+        ],
+        correct: 1, type: '2',
+        expl: `${rb('歯','は')}みがきでむし${rb('歯','は')}キンをぼくめつするんだ！${rb('歯','は')}みがきは${rb('自分','じぶん')}の${rb('歯','は')}を${rb('守','まも')}るためにするんだね。`,
+      },
+      {
+        q: `${rb('歯','は')}みがきは、どんなふうにするのが${rb('大事','だいじ')}？`,
+        opts: [
+          `テレビを${rb('見','み')}ながらサッと`,
+          `${rb('歯','は')}を1${rb('本','ほん')}1${rb('本','ほん')}ていねいにみがく🦷`,
+          `${rb('水','みず')}で${rb('口','くち')}をゆすぐだけ`,
+          `${rb('歯','は')}ブラシをかむだけ`,
+        ],
+        correct: 1, type: '4',
+        expl: `${rb('歯','は')}を1${rb('本','ほん')}1${rb('本','ほん')}ていねいにみがくのが${rb('大事','だいじ')}！${rb('大切','たいせつ')}なのは${rb('時間','じかん')}より「きれいにみがくこと」だよ！`,
+      },
+      {
+        q: `${rb('歯','は')}みがきは、どのタイミングでするのが${rb('大事','だいじ')}？`,
+        opts: [
+          `${rb('朝','あさ')}だけ`,
+          `${rb('食後','しょくご')}と${rb('寝','ね')}る${rb('前','まえ')}🌙✨`,
+          `おやつの${rb('前','まえ')}`,
+          `2${rb('年','ねん')}に1${rb('度','ど')}だけ`,
+        ],
+        correct: 1, type: '4',
+        expl: `${rb('食後','しょくご')}と${rb('寝','ね')}る${rb('前','まえ')}の${rb('両方','りょうほう')}が${rb('大事','だいじ')}！${rb('寝','ね')}ている${rb('間','あいだ')}はだえきが${rb('減','へ')}ってむし${rb('歯','は')}キンが${rb('大暴','おおあば')}れするから、${rb('寝','ね')}る${rb('前','まえ')}の${rb('歯','は')}みがきが${rb('最重要','さいじゅうよう')}！`,
+      },
+      {
+        q: `おやつを${rb('食','た')}べる${rb('時','とき')}、どっちが${rb('良','よ')}い？`,
+        opts: [
+          `1${rb('日中','にちじゅう')}ダラダラ${rb('食','た')}べる`,
+          `${rb('時間','じかん')}を${rb('決','き')}めて${rb('食','た')}べる⏰`,
+        ],
+        correct: 1, type: '2',
+        expl: `${rb('時間','じかん')}を${rb('決','き')}めて${rb('食','た')}べるのが${rb('正解','せいかい')}！ダラダラ${rb('食','た')}べるとずーっと${rb('歯','は')}が${rb('酸','さん')}にこうげきされちゃうんだ。${rb('決','き')}まった${rb('時間','じかん')}に${rb('食','た')}べてそのあと${rb('歯','は')}みがきしようね！`,
+      },
+      {
+        q: `${rb('歯','は')}を${rb('強','つよ')}くする${rb('魔法','まほう')}の${rb('成分','せいぶん')}は？`,
+        opts: [
+          `フッそ✨`,
+          `${rb('塩','しお')}`,
+          `${rb('砂糖','さとう')}`,
+          `カレーこ`,
+        ],
+        correct: 0, type: '4',
+        expl: `フッそが${rb('正解','せいかい')}！フッそは${rb('歯','は')}の${rb('表面','ひょうめん')}を${rb('強','つよ')}くして${rb('酸','さん')}に${rb('溶','と')}けにくくする${rb('力','ちから')}があるんだ。フッそ${rb('入','い')}りの${rb('歯','は')}みがきこを${rb('使','つか')}おうね！`,
+      },
+      {
+        q: `${rb('歯医者','はいしゃ')}さんには、どのくらいのひんどで${rb('行','い')}くのが${rb('良','よ')}い？`,
+        opts: [
+          `むし${rb('歯','は')}になったら`,
+          `3〜6ヶ${rb('月','げつ')}に1${rb('回','かい')}😊`,
+          `10${rb('年','ねん')}に1${rb('回','かい')}`,
+          `${rb('毎日','まいにち')}`,
+        ],
+        correct: 1, type: '4',
+        expl: `3〜6ヶ${rb('月','げつ')}に1${rb('回','かい')}ていきてきに${rb('行','い')}くのが${rb('良','よ')}いよ！むし${rb('歯','は')}になる${rb('前','まえ')}に${rb('歯医者','はいしゃ')}さんにチェックしてもらうのが${rb('大事','だいじ')}なんだ！`,
+      },
+      {
+        q: `${rb('歯','は')}ブラシの${rb('毛先','けさき')}が${rb('広','ひろ')}がったら、どうする？`,
+        opts: [
+          `そのまま${rb('使','つか')}いつづける`,
+          `${rb('新','あたら')}しいのにこうかん🔄`,
+          `${rb('火','ひ')}でやいて${rb('直','なお')}す`,
+          `ハサミで${rb('切','き')}る`,
+        ],
+        correct: 1, type: '4',
+        expl: `${rb('新','あたら')}しいのにこうかんしよう！${rb('毛先','けさき')}が${rb('広','ひろ')}がるとよごれが${rb('取','と')}れなくなっちゃうんだ。1ヶ${rb('月','げつ')}くらいでこうかんするのがベスト！`,
+      },
+      {
+        q: `${rb('歯','は')}と${rb('歯','は')}の${rb('間','あいだ')}のよごれを${rb('取','と')}るには？`,
+        opts: [
+          `つまようじ`,
+          `デンタルフロス（${rb('糸','いと')}ようじ）🦷`,
+          `ゆび`,
+          `した`,
+        ],
+        correct: 1, type: '4',
+        expl: `デンタルフロスが${rb('正解','せいかい')}！${rb('歯','は')}ブラシだけでは${rb('歯','は')}と${rb('歯','は')}の${rb('間','あいだ')}のよごれは60%しか${rb('取','と')}れないけど、フロスを${rb('使','つか')}えば90%${rb('取','と')}れるよ！`,
+      },
+      {
+        q: `だえき（つば）の${rb('役目','やくめ')}は？`,
+        opts: [
+          `${rb('歯','は')}をよごす`,
+          `${rb('歯','は')}を${rb('守','まも')}ってくれる🛡️`,
+          `むし${rb('歯','は')}を${rb('作','つく')}る`,
+          `${rb('何','なに')}もしない`,
+        ],
+        correct: 1, type: '4',
+        expl: `だえきは${rb('歯','は')}を${rb('守','まも')}るヒーロー！${rb('口','くち')}の${rb('中','なか')}をあらってくれたり${rb('酸','さん')}を${rb('中和','ちゅうわ')}してくれたりするんだ。よくかんでだえきをたくさん${rb('出','だ')}そうね！`,
+      },
+      {
+        q: `${rb('歯','は')}みがきしないと、こわい${rb('未来','みらい')}が${rb('待','ま')}ってるよ！（２つえらんでね😱）`,
+        opts: [
+          `${rb('歯','は')}が${rb('空','そら')}にとんでいく🎈`,
+          `${rb('歯','は')}が${rb('全部','ぜんぶ')}ダイヤモンドになる💎`,
+          `${rb('歯周病','ししゅうびょう')}になって${rb('歯','は')}が${rb('全部','ぜんぶ')}ぬけちゃう😭`,
+          `${rb('歯','は')}ぐきから${rb('血','ち')}が${rb('出','で')}る🩸`,
+        ],
+        correct: [2, 3], type: 'multi',
+        expl: `${rb('正解','せいかい')}は「${rb('歯周病','ししゅうびょう')}で${rb('歯','は')}がぬける」と「${rb('歯','は')}ぐきから${rb('血','ち')}が${rb('出','で')}る」！むし${rb('歯','は')}がなくても${rb('歯','は')}みがきしないと${rb('歯周病','ししゅうびょう')}になっちゃうんだ。${rb('超','ちょう')}こわい！`,
+      },
+      {
+        q: `むし${rb('歯','は')}をよぼうするために、${rb('他','ほか')}にできることは？`,
+        opts: [
+          `${rb('夜','よる')}ふかしする`,
+          `キシリトールガムをかむ😋`,
+          `${rb('歯','は')}をみがかない`,
+          `${rb('甘','あま')}いものをたくさん${rb('食','た')}べる`,
+        ],
+        correct: 1, type: '4',
+        expl: `キシリトールガムが${rb('正解','せいかい')}！キシリトールはむし${rb('歯','は')}キンが${rb('食','た')}べても${rb('酸','さん')}を${rb('作','つく')}れないんだ。だえきもたくさん${rb('出','で')}るから${rb('歯','は')}に${rb('良','よ')}いんだよ！`,
+      },
+
+    ];
+
+    /* =====================================================================
+       STORY DIALOGS
+    ===================================================================== */
+    const STORY = [
+      { who: 'boss', line: 'ふははは！むし歯キンのぐんだんが、みんなの歯を攻撃するぞ！' },
+      { who: 'boss', line: 'どうせ子どもたちは歯みがきなんてしない！むし歯天国にしてやる！😈' },
+      { who: 'haku', line: 'まかせて！ぼくピカくんが大魔王をたおしてみせる！' },
+      { who: 'haku', line: 'むし歯のひみつを正しく答えれば、大魔王のHPがどんどん減るぞ！💪' },
+      { who: 'haku', line: '20問ぜんぶ答えて、大魔王をやっつけよう！🦷' },
+    ];
+
+    /* =====================================================================
+       STYLES (shared tokens)
+    ===================================================================== */
+    const C = {
+      pink:  '#F8A9B8',
+      green: '#A0DA36',
+      red:   '#CC0000',
+      dark:  '#1A1A1A',
+      white: '#FFFFFF',
+    };
+
+    /* =====================================================================
+       APP
+    ===================================================================== */
+    function App() {
+      const [screen,       setScreen]       = useState('story');   // story|quiz|souvenir|challenge
+      const [storyStep,    setStoryStep]     = useState(0);
+      const [qIdx,         setQIdx]          = useState(0);
+      const [score,        setScore]         = useState(0);
+      const [combo,        setCombo]         = useState(0);
+      const [maxCombo,     setMaxCombo]      = useState(0);
+      const [bossHP,       setBossHP]        = useState(100);
+      const [answered,     setAnswered]      = useState(false);
+      const [selected,     setSelected]      = useState(null);
+      const [multiSel,     setMultiSel]      = useState([]);
+      const [isCorrect,    setIsCorrect]     = useState(false);
+      const [showExpl,     setShowExpl]      = useState(false);
+      const [showNext,     setShowNext]      = useState(false);
+      const [comboAnim,    setComboAnim]     = useState(false);
+      const [bossAngry,    setBossAngry]     = useState(false);
+      const [muted,        setMuted]         = useState(false);
+      // challenge
+      const [cOrder,       setCOrder]        = useState([]);
+      const [cIdx,         setCIdx]          = useState(0);
+      const [cScore,       setCScore]        = useState(0);
+      const [cTime,        setCTime]         = useState(10);
+      const [cAnswered,    setCAnswered]     = useState(false);
+      const [cSelected,    setCSelected]     = useState(null);
+      const [cIsCorrect,   setCIsCorrect]    = useState(false);
+      const [cShowExpl,    setCShowExpl]     = useState(false);
+      const [cDone,        setCDone]         = useState(false);
+
+      const nextTimerRef      = useRef(null);
+      const cTimerRef         = useRef(null);
+      const cAdvanceTimerRef  = useRef(null);
+      const mutedRef          = useRef(false);
+
+      // keep mutedRef in sync so sound fns captured in closures use latest value
+      useEffect(() => { mutedRef.current = muted; }, [muted]);
+
+      const play = useCallback((name) => {
+        if (!mutedRef.current && SFX[name]) { try { SFX[name](); } catch(e) {} }
+      }, []);
+
+      /* ---------- STORY ---------- */
+      const advanceStory = () => {
+        play('tap');
+        if (storyStep < STORY.length - 1) setStoryStep(s => s + 1);
+        else startQuiz();
+      };
+      const skipStory = () => { play('tap'); startQuiz(); };
+
+      /* ---------- QUIZ START ---------- */
+      const startQuiz = () => {
+        setQIdx(0); setScore(0); setCombo(0); setMaxCombo(0); setBossHP(100);
+        resetQState();
+        setScreen('quiz');
+      };
+
+      const resetQState = () => {
+        setAnswered(false); setSelected(null); setMultiSel([]);
+        setIsCorrect(false); setShowExpl(false); setShowNext(false);
+        setBossAngry(false);
+        if (nextTimerRef.current) clearTimeout(nextTimerRef.current);
+      };
+
+      /* ---------- ANSWER HANDLING ---------- */
+      const q = QS[qIdx] || QS[0];
+      const HP_PER_Q = 100 / QS.length;
+
+      const handleAnswer = (idx) => {
+        if (answered) return;
+        if (q.type === 'multi') {
+          setMultiSel(prev => prev.includes(idx) ? prev.filter(i => i !== idx) : [...prev, idx]);
+          return;
+        }
+        commitAnswer(idx, null);
+      };
+
+      const submitMulti = () => {
+        if (answered) return;
+        commitAnswer(null, multiSel);
+      };
+
+      const commitAnswer = (single, multi) => {
+        setAnswered(true);
+        const isMulti = q.type === 'multi';
+        const ok = isMulti
+          ? JSON.stringify([...(multi||[])].sort()) === JSON.stringify([...q.correct].sort())
+          : single === q.correct;
+
+        setSelected(isMulti ? multi : single);
+        setIsCorrect(ok);
+        setShowExpl(true);
+
+        if (ok) {
+          const nc = combo + 1;
+          setScore(s => s + 1);
+          setCombo(nc);
+          setMaxCombo(m => Math.max(m, nc));
+          setBossHP(h => Math.max(0, h - HP_PER_Q));
+          play('correct');
+          if (nc >= 3) {
+            play('combo');
+            setComboAnim(true);
+            setTimeout(() => setComboAnim(false), 1300);
+          }
+          setShowNext(true);
+        } else {
+          setCombo(0);
+          setBossAngry(true);
+          play('wrong');
+          setTimeout(() => setBossAngry(false), 700);
+          nextTimerRef.current = setTimeout(() => setShowNext(true), 500);
+        }
+      };
+
+      const goNext = () => {
+        if (nextTimerRef.current) clearTimeout(nextTimerRef.current);
+        const next = qIdx + 1;
+        if (next >= QS.length) {
+          play('fanfare');
+          setScreen('souvenir');
+        } else {
+          setQIdx(next);
+          resetQState();
+        }
+      };
+
+      /* ---------- CHALLENGE ---------- */
+      const startChallenge = () => {
+        // exclude multi-choice questions
+        const pool = QS.map((q, i) => i).filter(i => QS[i].type !== 'multi');
+        const shuffled = [...pool].sort(() => Math.random() - 0.5);
+        setCOrder(shuffled);
+        setCIdx(0); setCScore(0); setCTime(10);
+        setCAnswered(false); setCSelected(null); setCIsCorrect(false);
+        setCShowExpl(false); setCDone(false);
+        setScreen('challenge');
+      };
+
+      // Challenge timer
+      useEffect(() => {
+        if (screen !== 'challenge' || cDone || cAnswered) return;
+        if (cTimerRef.current) clearInterval(cTimerRef.current);
+        setCTime(10);
+        cTimerRef.current = setInterval(() => {
+          setCTime(t => {
+            if (t <= 1) {
+              clearInterval(cTimerRef.current);
+              return 0;
+            }
+            return t - 1;
+          });
+        }, 1000);
+        return () => clearInterval(cTimerRef.current);
+      }, [screen, cIdx, cDone, cAnswered]);
+
+      // Challenge timeout (time hits 0)
+      useEffect(() => {
+        if (screen !== 'challenge' || cDone || cAnswered || cTime !== 0) return;
+        setCAnswered(true);
+        setCIsCorrect(false);
+        setCShowExpl(true);
+        play('wrong');
+        scheduleChallengeAdvance();
+      }, [cTime]); // eslint-disable-line
+
+      const handleChallengeAnswer = (idx) => {
+        if (cAnswered) return;
+        clearInterval(cTimerRef.current);
+        const cq = QS[cOrder[cIdx]];
+        const ok = idx === cq.correct;
+        setCAnswered(true);
+        setCSelected(idx);
+        setCIsCorrect(ok);
+        setCShowExpl(true);
+        if (ok) { setCScore(s => s + 1); play('correct'); } else play('wrong');
+        scheduleChallengeAdvance();
+      };
+
+      const scheduleChallengeAdvance = () => {
+        if (cAdvanceTimerRef.current) clearTimeout(cAdvanceTimerRef.current);
+        cAdvanceTimerRef.current = setTimeout(() => {
+          setCIdx(prev => {
+            const next = prev + 1;
+            if (next >= cOrder.length) {
+              setCDone(true);
+              play('fanfare');
+              return prev;
+            }
+            setCAnswered(false);
+            setCSelected(null);
+            setCIsCorrect(false);
+            setCShowExpl(false);
+            setCTime(10);
+            return next;
+          });
+        }, 1800);
+      };
+
+      /* ---------- RENDER ---------- */
+      return (
+        <div style={{ fontFamily:"'M PLUS Rounded 1c',sans-serif", minHeight:'100dvh', position:'relative' }}>
+          {/* Mute button (always visible) */}
+          <button
+            onClick={() => setMuted(m => !m)}
+            style={{
+              position:'fixed', top:12, right:12, zIndex:2000,
+              width:44, height:44, borderRadius:'50%',
+              background:'rgba(255,255,255,0.88)', border:'2px solid rgba(0,0,0,0.12)',
+              fontSize:20, cursor:'pointer', display:'flex', alignItems:'center', justifyContent:'center',
+              boxShadow:'0 2px 10px rgba(0,0,0,0.18)',
+            }}
+            aria-label={muted ? '音ON' : '音OFF'}
+          >{muted ? '🔇' : '🔊'}</button>
+
+          {screen === 'story' && (
+            <StoryScreen dialog={STORY[storyStep]} step={storyStep} total={STORY.length}
+              onNext={advanceStory} onSkip={skipStory} />
+          )}
+          {screen === 'quiz' && (
+            <QuizScreen
+              q={q} qIdx={qIdx} total={QS.length}
+              bossHP={bossHP} combo={combo} score={score}
+              answered={answered} selected={selected} multiSel={multiSel}
+              isCorrect={isCorrect} showExpl={showExpl} showNext={showNext}
+              comboAnim={comboAnim} bossAngry={bossAngry}
+              onAnswer={handleAnswer} onSubmitMulti={submitMulti} onNext={goNext}
+            />
+          )}
+          {screen === 'souvenir' && (
+            <SouvenirScreen score={score} total={QS.length} maxCombo={maxCombo}
+              onRetry={() => { setStoryStep(0); setScreen('story'); }}
+              onChallenge={startChallenge} />
+          )}
+          {screen === 'challenge' && (
+            <ChallengeScreen
+              q={QS[cOrder[cIdx]]} qIdx={cIdx} total={cOrder.length}
+              score={cScore} time={cTime}
+              answered={cAnswered} selected={cSelected} isCorrect={cIsCorrect}
+              showExpl={cShowExpl} done={cDone}
+              onAnswer={handleChallengeAnswer}
+              onBack={() => setScreen('souvenir')}
+            />
+          )}
+        </div>
+      );
+    }
+
+    /* =====================================================================
+       STORY SCREEN
+    ===================================================================== */
+    function StoryScreen({ dialog, step, total, onNext, onSkip }) {
+      const isBoss = dialog.who === 'boss';
+      return (
+        <div style={{
+          minHeight:'100dvh', display:'flex', flexDirection:'column',
+          alignItems:'center', justifyContent:'center',
+          padding:'60px 20px 32px', position:'relative',
+          background: isBoss
+            ? 'linear-gradient(160deg,#2d0000 0%,#660000 40%,#cc2200 100%)'
+            : 'linear-gradient(160deg,#1a3300 0%,#3a6600 40%,#A0DA36 100%)',
+        }}>
+          {/* Skip */}
+          <button onClick={onSkip} style={{
+            position:'absolute', top:16, left:16,
+            padding:'8px 18px', background:'rgba(255,255,255,0.18)',
+            border:'2px solid rgba(255,255,255,0.35)', borderRadius:20,
+            fontSize:14, fontFamily:'inherit', cursor:'pointer', color:'#fff', fontWeight:700,
+          }}>スキップ ▶▶</button>
+
+          {/* Character image */}
+          <div style={{
+            width:200, height:200, marginBottom:20,
+            animation:'floatY 2.5s ease-in-out infinite',
+            filter:'drop-shadow(0 10px 30px rgba(0,0,0,0.4))',
+          }}>
+            <img
+              src={isBoss ? IMG_BOSS : IMG_HAKU}
+              alt={isBoss ? 'むし歯大魔王' : 'ピカくん'}
+              style={{ width:'100%', height:'100%', objectFit:'contain' }}
+            />
+          </div>
+
+          {/* Name tag */}
+          <div style={{
+            background: isBoss ? C.red : C.green,
+            color:'#fff', padding:'5px 20px', borderRadius:20,
+            fontWeight:800, fontSize:17, marginBottom:14,
+            boxShadow:'0 3px 12px rgba(0,0,0,0.3)',
+          }}>
+            {isBoss ? '😈 むし歯大魔王' : '🦷 ピカくん'}
+          </div>
+
+          {/* Dialog box — tap to advance */}
+          <div onClick={onNext} style={{
+            background:'rgba(255,255,255,0.94)',
+            borderRadius:22, padding:'20px 24px',
+            maxWidth:340, width:'100%',
+            fontSize:19, fontWeight:700, lineHeight:1.65,
+            color: C.dark, textAlign:'center',
+            border:`3px solid ${isBoss ? C.red : C.green}`,
+            boxShadow:'0 6px 28px rgba(0,0,0,0.22)',
+            cursor:'pointer', position:'relative', minHeight:48,
+          }}>
+            {dialog.line}
+            <div style={{
+              position:'absolute', bottom:10, right:14,
+              fontSize:12, color:'#aaa', fontWeight:400,
+            }}>タップで次へ ▼</div>
+          </div>
+
+          {/* Progress dots */}
+          <div style={{ display:'flex', gap:10, marginTop:22 }}>
+            {Array.from({length:total}).map((_,i) => (
+              <div key={i} style={{
+                width:11, height:11, borderRadius:'50%',
+                background: i <= step ? '#fff' : 'rgba(255,255,255,0.3)',
+                transition:'background 0.3s',
+              }}/>
+            ))}
+          </div>
+        </div>
+      );
+    }
+
+    /* =====================================================================
+       QUIZ SCREEN
+    ===================================================================== */
+    function QuizScreen({
+      q, qIdx, total, bossHP, combo, score,
+      answered, selected, multiSel, isCorrect,
+      showExpl, showNext, comboAnim, bossAngry,
+      onAnswer, onSubmitMulti, onNext,
+    }) {
+      const is2    = q.type === '2';
+      const isMulti = q.type === 'multi';
+      const hpPct  = Math.round(bossHP);
+      const hpClr  = bossHP > 50 ? C.red : bossHP > 25 ? '#FF8C00' : '#FFD700';
+
+      return (
+        <div style={{
+          minHeight:'100dvh', display:'flex', flexDirection:'column',
+          maxWidth:480, margin:'0 auto', padding:'12px 16px 28px',
+        }}>
+          {/* Header row */}
+          <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:8, gap:6 }}>
+            <div style={pill('#fff8')}>🏆 {score} / {total}</div>
+            {combo >= 2 && (
+              <div style={{...pill('#FF6B35'), color:'#fff', fontSize:14}}>🔥 {combo}コンボ</div>
+            )}
+            <div style={pill('#fff8')}>{qIdx + 1} / {total}</div>
+          </div>
+
+          {/* Boss HP bar */}
+          <div style={{ marginBottom:10 }}>
+            <div style={{ display:'flex', alignItems:'center', gap:6, marginBottom:3 }}>
+              <img
+                src={IMG_BOSS} alt="大魔王"
+                style={{
+                  width:50, height:50, objectFit:'contain',
+                  animation: bossAngry ? 'shake 0.5s ease' : 'none',
+                  filter: bossAngry ? 'brightness(1.8) saturate(2)' : 'none',
+                }}
+              />
+              <span style={{ fontWeight:800, fontSize:13, color: C.dark }}>大魔王 HP</span>
+              <span style={{ fontWeight:800, fontSize:13, color: hpClr, marginLeft:'auto' }}>{hpPct}%</span>
+            </div>
+            <div style={{
+              width:'100%', height:18, background:'rgba(255,255,255,0.45)',
+              borderRadius:9, overflow:'hidden', border:'2px solid rgba(0,0,0,0.12)',
+            }}>
+              <div style={{
+                width:`${hpPct}%`, height:'100%',
+                background:`linear-gradient(90deg,${hpClr},${hpClr}cc)`,
+                borderRadius:9, transition:'width 0.7s ease, background 0.5s ease',
+              }}/>
+            </div>
+          </div>
+
+          {/* ピカくん */}
+          <div style={{ display:'flex', justifyContent:'center', marginBottom:6 }}>
+            <img src={IMG_HAKU} alt="ピカくん" style={{
+              width:130, height:130, objectFit:'contain',
+              filter:'drop-shadow(0 4px 14px rgba(0,0,0,0.18))',
+              animation: isCorrect && answered ? 'floatY 1s ease-in-out' : 'none',
+            }}/>
+          </div>
+
+          {/* Question box */}
+          <div style={{
+            background:'rgba(255,255,255,0.93)', borderRadius:20,
+            overflow:'hidden', marginBottom:24,
+            boxShadow:'0 4px 18px rgba(0,0,0,0.15)',
+            border:'4px solid #1A1A1A',
+          }}>
+            <div style={{
+              background:'#1A1A1A', color:'#fff',
+              padding:'7px 18px', textAlign:'center',
+              fontWeight:800, fontSize:16, letterSpacing:1,
+            }}>もんだい Q{qIdx + 1}</div>
+            <div style={{
+              padding:'14px 18px',
+              fontSize:18, fontWeight:700, lineHeight:1.65, color: C.dark,
+              textAlign:'center',
+            }}>
+              <H t={q.q} />
+              {isMulti && <div style={{ fontSize:13, color: C.red, marginTop:5, fontWeight:800 }}>※ 2つえらんでね！</div>}
+            </div>
+          </div>
+
+          {/* Choices */}
+          <div style={{
+            display: is2 ? 'grid' : 'flex',
+            gridTemplateColumns: is2 ? '1fr 1fr' : undefined,
+            flexDirection: is2 ? undefined : 'column',
+            gap:10, marginBottom:12,
+          }}>
+            {q.opts.map((opt, i) => {
+              const isSel  = isMulti ? multiSel.includes(i) : selected === i;
+              const isAns  = isMulti ? q.correct.includes(i) : i === q.correct;
+              let bg = 'rgba(255,255,255,0.9)';
+              let bd = '3px solid rgba(255,255,255,0.6)';
+              let cl = C.dark;
+              if (answered) {
+                if (isAns)              { bg = '#c8f05a'; bd = `3px solid ${C.green}`; }
+                else if (isSel && !isAns) { bg = '#ffcccc'; bd = `3px solid ${C.red}`; cl = C.red; }
+                else                    { bg = 'rgba(255,255,255,0.35)'; cl = '#aaa'; }
+              } else if (isSel) {
+                bg = C.pink; bd = `3px solid ${C.red}`;
+              }
+              return (
+                <button key={i} onClick={() => onAnswer(i)}
+                  disabled={answered && !isMulti}
+                  style={{
+                    minHeight:52, padding: is2 ? '12px 10px' : '13px 18px',
+                    background:bg, border:bd, borderRadius:16,
+                    fontSize: is2 ? 16 : 17, fontWeight:700, color:cl,
+                    cursor: (answered && !isMulti) ? 'default' : 'pointer',
+                    transition:'all 0.2s', fontFamily:'inherit',
+                    lineHeight:1.45, textAlign:'center',
+                    boxShadow:'0 3px 12px rgba(0,0,0,0.1)',
+                    display:'flex', alignItems:'center', justifyContent:'center',
+                  }}>
+                  <H t={opt} />
+                </button>
+              );
+            })}
+          </div>
+
+          {/* Multi submit */}
+          {isMulti && !answered && (
+            <button onClick={onSubmitMulti} disabled={multiSel.length < 2} style={{
+              minHeight:52, padding:'13px 24px',
+              background: multiSel.length >= 2 ? C.green : '#ccc',
+              border:'none', borderRadius:16,
+              fontSize:18, fontWeight:800, color:'#fff',
+              cursor: multiSel.length >= 2 ? 'pointer' : 'default',
+              fontFamily:'inherit', marginBottom:12,
+              boxShadow:'0 4px 14px rgba(0,0,0,0.15)',
+            }}>これで決める！✊</button>
+          )}
+
+          {/* Explanation */}
+          {showExpl && (
+            <div style={{
+              background: isCorrect ? 'rgba(200,240,90,0.25)' : 'rgba(255,200,200,0.65)',
+              border:`3px solid ${isCorrect ? C.green : C.red}`,
+              borderRadius:16, padding:'13px 15px', marginBottom:10,
+              animation:'fadeUp 0.3s ease',
+            }}>
+              <div style={{ fontSize:20, fontWeight:800, color: isCorrect ? '#3a7000' : C.red, marginBottom:5 }}>
+                {isCorrect ? '⭕ やったね！正解！🎉' : '❌ ざんねん！ハズレ！'}
+              </div>
+
+              <div style={{ fontSize:14, lineHeight:1.7, color:'#333', whiteSpace:'pre-line' }}>
+                <H t={q.expl} />
+              </div>
+            </div>
+          )}
+
+          {/* Boss reaction when wrong */}
+          {showExpl && !isCorrect && (
+            <div style={{
+              display:'flex', alignItems:'center', gap:10,
+              background:'rgba(204,0,0,0.07)', border:'2px dashed #CC0000',
+              borderRadius:12, padding:'8px 14px', marginBottom:10,
+            }}>
+              <img src={IMG_BOSS} alt="大魔王" style={{ width:54, height:54, objectFit:'contain' }}/>
+              <span style={{ fontWeight:700, fontSize:14, color: C.red }}>
+                「助かった〜！ふははは！😈」
+              </span>
+            </div>
+          )}
+
+          {/* Next button */}
+          {showNext && (
+            <button onClick={onNext} style={{
+              minHeight:58, padding:'14px 24px',
+              background:'linear-gradient(135deg,#A0DA36,#7CB82F)',
+              border:'none', borderRadius:20,
+              fontSize:20, fontWeight:800, color:'#fff',
+              cursor:'pointer', fontFamily:'inherit',
+              boxShadow:'0 6px 22px rgba(160,218,54,0.45)',
+              animation:'fadeUp 0.3s ease',
+            }}>
+              {qIdx + 1 >= total ? '🏆 けっかをみる！' : 'つぎの問題へ ▶'}
+            </button>
+          )}
+
+          {/* Combo popup overlay */}
+          {comboAnim && (
+            <div style={{
+              position:'fixed', inset:0, zIndex:1500,
+              display:'flex', alignItems:'center', justifyContent:'center',
+              pointerEvents:'none',
+            }}>
+              <div style={{
+                background:'rgba(255,255,255,0.95)', borderRadius:22,
+                padding:'16px 36px',
+                fontSize:44, fontWeight:800, color:'#FF6B35',
+                textShadow:'0 3px 14px rgba(0,0,0,0.2)',
+                animation:'comboPop 0.5s ease',
+              }}>🔥 {combo}コンボ！</div>
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    /* =====================================================================
+       SOUVENIR SCREEN  (おみやげ)
+    ===================================================================== */
+    function SouvenirScreen({ score, total, maxCombo, onRetry, onChallenge }) {
+      const pct = Math.round((score / total) * 100);
+      const badge = pct === 100 ? { txt:'🏆 むし歯ハカセ！',      bg:'#FFD700', color:'#4a3000' }
+                  : pct >= 80  ? { txt:'🥇 むし歯マスター！',     bg: C.green,  color:'#fff'    }
+                  : pct >= 60  ? { txt:'🥈 むし歯よぼう士',       bg:'#64B5F6', color:'#fff'    }
+                  :              { txt:'🥉 むし歯けんきゅうちゅう',bg: C.pink,   color: C.dark   };
+      return (
+        <div style={{
+          minHeight:'100dvh', display:'flex', flexDirection:'column',
+          alignItems:'center', padding:'32px 20px 40px',
+          maxWidth:480, margin:'0 auto',
+        }}>
+          {/* Boss defeated message */}
+          <div style={{ marginBottom:6, textAlign:'center' }}>
+            <img src={IMG_BOSS} alt="大魔王" style={{
+              width:70, height:70, objectFit:'contain',
+              filter:'grayscale(0.6) brightness(0.7)',
+              opacity:0.6,
+            }}/>
+            <div style={{ fontSize:13, color:'#888', fontWeight:700, marginTop:2 }}>大魔王 HP {Math.max(0, 100 - score * 5)}%…</div>
+          </div>
+
+          <img src={IMG_HAKU} alt="ピカくん" style={{
+            width:130, height:130, objectFit:'contain', marginBottom:12,
+            filter:'drop-shadow(0 8px 26px rgba(0,0,0,0.22))',
+            animation:'floatY 2.5s ease-in-out infinite',
+          }}/>
+
+          <h1 style={{
+            fontSize:30, fontWeight:800, color: C.dark, textAlign:'center',
+            marginBottom:16, textShadow:'2px 3px 0 rgba(255,255,255,0.7)',
+          }}>
+            {score === total ? '🎉 ぜんもん せいかい！' : '🎉 クイズ おわったよ！'}
+          </h1>
+
+          {/* White result card */}
+          <div style={{
+            background:'#FFFFFF', borderRadius:26,
+            padding:'24px 28px', width:'100%',
+            boxShadow:'0 10px 40px rgba(0,0,0,0.14)', marginBottom:20,
+          }}>
+            {/* Score */}
+            <div style={{ textAlign:'center', marginBottom:18 }}>
+              <div style={{ fontSize:13, color:'#aaa', marginBottom:2 }}>スコア</div>
+              <div style={{ fontSize:58, fontWeight:800, color: C.dark, lineHeight:1 }}>
+                {score}<span style={{ fontSize:26, color:'#888' }}> / {total}</span>
+              </div>
+              <div style={{ fontSize:28, fontWeight:800, color: C.green, marginTop:2 }}>{pct}%</div>
+            </div>
+
+            {/* Badge */}
+            <div style={{
+              background:badge.bg, color:badge.color,
+              borderRadius:16, padding:'12px 20px', textAlign:'center',
+              fontWeight:800, fontSize:20, marginBottom:14,
+              boxShadow:'0 4px 14px rgba(0,0,0,0.18)',
+            }}>{badge.txt}</div>
+
+            {/* Max combo */}
+            {maxCombo >= 3 && (
+              <div style={{ textAlign:'center', fontSize:16, color:'#FF6B35', fontWeight:700, marginBottom:12 }}>
+                🔥 さいこうコンボ：{maxCombo}コンボ！
+              </div>
+            )}
+
+            {/* Show to parents */}
+            <div style={{
+              background:'#FFF9C4', borderRadius:14,
+              padding:'13px 16px', textAlign:'center',
+              fontSize:16, fontWeight:800, color: C.dark,
+              border:'2px dashed #FFD700',
+            }}>📣 おうちの人に見せてね！</div>
+          </div>
+
+          {/* Buttons */}
+          <div style={{ display:'flex', flexDirection:'column', gap:12, width:'100%' }}>
+            <button onClick={onChallenge} style={{
+              minHeight:58, padding:'14px 24px',
+              background:`linear-gradient(135deg,${C.red},#ff4444)`,
+              border:'none', borderRadius:20,
+              fontSize:20, fontWeight:800, color:'#fff',
+              cursor:'pointer', fontFamily:'inherit',
+              boxShadow:`0 6px 22px rgba(204,0,0,0.4)`,
+              lineHeight:1.3,
+            }}>
+              ⚡ チャレンジモード！
+              <div style={{ fontSize:13, fontWeight:400, opacity:0.9, marginTop:2 }}>10びょうタイムアタック</div>
+            </button>
+            <button onClick={onRetry} style={{
+              minHeight:52, padding:'12px 24px',
+              background:'rgba(255,255,255,0.82)',
+              border:'3px solid rgba(255,255,255,0.6)', borderRadius:20,
+              fontSize:18, fontWeight:700, color: C.dark,
+              cursor:'pointer', fontFamily:'inherit',
+            }}>🔄 もう一度あそぶ</button>
+          </div>
+        </div>
+      );
+    }
+
+    /* =====================================================================
+       CHALLENGE SCREEN
+    ===================================================================== */
+    function ChallengeScreen({ q, qIdx, total, score, time, answered, selected, isCorrect, showExpl, done, onAnswer, onBack }) {
+      if (done || !q) {
+        const pct = Math.round((score / total) * 100);
+        const msg = pct === 100 ? 'かんぺき！！🏆' : pct >= 80 ? 'すごい！🥇' : pct >= 60 ? 'よくがんばった！🥈' : 'もう一度チャレンジ！💪';
+        return (
+          <div style={{
+            minHeight:'100dvh', display:'flex', flexDirection:'column',
+            alignItems:'center', justifyContent:'center',
+            padding:'32px 20px', maxWidth:480, margin:'0 auto',
+          }}>
+            <div style={{ fontSize:64, marginBottom:12 }}>⚡</div>
+            <h2 style={{ fontSize:28, fontWeight:800, marginBottom:16, color: C.dark, textAlign:'center' }}>チャレンジ完了！</h2>
+            <div style={{
+              background:'#fff', borderRadius:26, padding:'28px 36px',
+              textAlign:'center', marginBottom:24, width:'100%',
+              boxShadow:'0 10px 40px rgba(0,0,0,0.14)',
+            }}>
+              <div style={{ fontSize:52, fontWeight:800, color: C.red }}>{score}</div>
+              <div style={{ fontSize:20, color:'#888' }}>/ {total} もん せいかい</div>
+              <div style={{ fontSize:26, fontWeight:800, color: C.green, marginTop:6 }}>{pct}%</div>
+              <div style={{ fontSize:18, fontWeight:700, marginTop:8, color: C.dark }}>{msg}</div>
+            </div>
+            <div style={{ display:'flex', flexDirection:'column', gap:12, width:'100%' }}>
+              <button onClick={onBack} style={{
+                minHeight:58, padding:'14px 24px',
+                background:`linear-gradient(135deg,${C.green},#7CB82F)`,
+                border:'none', borderRadius:20,
+                fontSize:20, fontWeight:800, color:'#fff',
+                cursor:'pointer', fontFamily:'inherit',
+                boxShadow:'0 6px 22px rgba(160,218,54,0.45)',
+              }}>🏠 けっかに戻る</button>
+            </div>
+          </div>
+        );
+      }
+
+      const is2   = q.type === '2';
+      const timeCl = time <= 3 ? C.red : time <= 6 ? '#FF8C00' : C.dark;
+
+      return (
+        <div style={{
+          minHeight:'100dvh', display:'flex', flexDirection:'column',
+          maxWidth:480, margin:'0 auto', padding:'12px 16px 28px',
+        }}>
+          {/* Header */}
+          <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:10, gap:6 }}>
+            <div style={pill('#fff8')}>⚡ {score} / {total}</div>
+            <div style={{
+              ...pill(time <= 3 ? C.red : '#fff8'),
+              color: time <= 3 ? '#fff' : timeCl,
+              fontSize:22, fontWeight:800, minWidth:72, textAlign:'center',
+              animation: time <= 3 ? 'timerPulse 0.8s ease-in-out infinite' : 'none',
+              transition:'all 0.3s',
+            }}>⏱ {time}</div>
+          </div>
+
+          {/* Timer bar */}
+          <div style={{
+            width:'100%', height:10, background:'rgba(255,255,255,0.4)',
+            borderRadius:5, overflow:'hidden', marginBottom:14, border:'1px solid rgba(0,0,0,0.1)',
+          }}>
+            <div style={{
+              width:`${(time / 10) * 100}%`, height:'100%',
+              background: time <= 3 ? C.red : C.green,
+              borderRadius:5, transition:'width 1s linear, background 0.3s',
+            }}/>
+          </div>
+
+          {/* Q label */}
+          <div style={{
+            background:'rgba(255,255,255,0.93)', borderRadius:20,
+            padding:'14px 18px', marginBottom:14,
+            fontSize:17, fontWeight:700, lineHeight:1.65, color: C.dark,
+            textAlign:'center', boxShadow:'0 4px 18px rgba(0,0,0,0.1)',
+            border:`3px solid rgba(204,0,0,0.3)`,
+          }}>
+            <div style={{ fontSize:12, color: C.red, marginBottom:3, fontWeight:800 }}>⚡ チャレンジ Q{qIdx + 1}</div>
+            <H t={q.q} />
+          </div>
+
+          {/* Choices */}
+          <div style={{
+            display: is2 ? 'grid' : 'flex',
+            gridTemplateColumns: is2 ? '1fr 1fr' : undefined,
+            flexDirection: is2 ? undefined : 'column',
+            gap:10, marginBottom:12,
+          }}>
+            {q.opts.map((opt, i) => {
+              let bg = 'rgba(255,255,255,0.9)';
+              let bd = '3px solid rgba(255,255,255,0.6)';
+              if (answered) {
+                if (i === q.correct)          { bg = '#c8f05a'; bd = `3px solid ${C.green}`; }
+                else if (selected === i)      { bg = '#ffcccc'; bd = `3px solid ${C.red}`; }
+                else                          { bg = 'rgba(255,255,255,0.35)'; }
+              }
+              return (
+                <button key={i} onClick={() => onAnswer(i)} disabled={answered} style={{
+                  minHeight:52, padding: is2 ? '12px 10px' : '13px 18px',
+                  background:bg, border:bd, borderRadius:16,
+                  fontSize: is2 ? 16 : 17, fontWeight:700, color: C.dark,
+                  cursor: answered ? 'default' : 'pointer',
+                  transition:'all 0.2s', fontFamily:'inherit',
+                  lineHeight:1.45, textAlign:'center',
+                  boxShadow:'0 3px 12px rgba(0,0,0,0.1)',
+                  display:'flex', alignItems:'center', justifyContent:'center',
+                }}>
+                  <H t={opt} />
+                </button>
+              );
+            })}
+          </div>
+
+          {showExpl && (
+            <div style={{
+              background: isCorrect ? 'rgba(200,240,90,0.25)' : 'rgba(255,200,200,0.65)',
+              border:`3px solid ${isCorrect ? C.green : C.red}`,
+              borderRadius:16, padding:'12px 14px', animation:'fadeUp 0.3s ease',
+            }}>
+              <div style={{ fontSize:18, fontWeight:800, color: isCorrect ? '#3a7000' : C.red }}>
+                {isCorrect ? '⭕ 正解！🎉' : time === 0 ? '⏱ 時間切れ！' : '❌ ハズレ！'}
+              </div>
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    /* =====================================================================
+       SHARED STYLE HELPERS
+    ===================================================================== */
+    function pill(bg) {
+      return {
+        background:bg, borderRadius:20, padding:'5px 14px',
+        fontWeight:800, fontSize:15, color: C.dark,
+        boxShadow:'0 2px 8px rgba(0,0,0,0.1)',
+        whiteSpace:'nowrap',
+      };
+    }
+
+    /* =====================================================================
+       MOUNT
+    ===================================================================== */
+    ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+  </script>
+</body>
+</html>
