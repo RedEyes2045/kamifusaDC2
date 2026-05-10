@@ -897,7 +897,7 @@
           {/* Boss defeated message */}
           <div style={{ marginBottom:6, textAlign:'center' }}>
             <img src={IMG_BOSS} alt="大魔王" style={{
-              width:300, height:300, objectFit:'contain',
+              width:100, height:100, objectFit:'contain',
               filter:'grayscale(0.6) brightness(0.7)',
               opacity:0.6,
             }}/>
@@ -905,7 +905,7 @@
           </div>
 
           <img src={IMG_HAKU} alt="ピカくん" style={{
-            width:'min(90vw, 60dvh)', height:'min(90vw, 60dvh)', objectFit:'contain', marginBottom:12,
+            width:'min(30vw, 20dvh)', height:'min(30vw, 20dvh)', objectFit:'contain', marginBottom:12,
             filter:'drop-shadow(0 8px 26px rgba(0,0,0,0.22))',
             animation:'floatY 2.5s ease-in-out infinite',
           }}/>
@@ -914,7 +914,7 @@
             fontSize:30, fontWeight:800, color: C.dark, textAlign:'center',
             marginBottom:16, textShadow:'2px 3px 0 rgba(255,255,255,0.7)',
           }}>
-            {score === total ? '🎉 ぜんもん せいかい！' : '🎉 クイズ おわったよ！'}
+            {score === total ? '🎉 ぜんもん せいかい！' : '🎉 クイズ がんばったね！'}
           </h1>
 
           {/* White result card */}
